@@ -366,7 +366,7 @@ Available when a pull request is open in the diff (`skim pr`). Keys marked _(on 
 | `o` _(on description)_ | Fold / expand the PR description block                    |
 | `r`                    | Refresh diff and refetch review threads                   |
 
-**SUBMIT REVIEW dialog** (`R`): `Tab` / `Shift-Tab` cycle the verdict (Comment / Approve / Request changes), `Ctrl-S` submits, `Ctrl-D` discards the pending review (two-step confirm), `ESC` cancels. Body editing uses the same vim-style editor as comments.
+**SUBMIT REVIEW dialog** (`R`): `Tab` / `Shift-Tab` cycle the verdict (Comment / Approve / Request changes), `Ctrl-S` submits (`Enter` inserts a newline), `Ctrl-D` discards the pending review (two-step confirm), `ESC` cancels. Body editing uses the same vim-style editor as comments.
 
 **PR INFO panel** (`i`): `j` / `k` scroll, `Ctrl-d` / `Ctrl-u` page, `g` / `G` jump to top / bottom, `r` refetch, `i` / `q` / `ESC` close.
 

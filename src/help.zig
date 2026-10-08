@@ -220,7 +220,7 @@ pub fn renderHelpPopup(app: *App, win: vaxis.Window) !void {
             .{ .key = "o", .desc = "Fold / expand description (on it)" },
             .{ .key = "✓ ✗ ●", .desc = "Status row: approvals, changes, checks" },
             .{ .key = "Tab / S-Tab", .desc = "Submit: cycle verdict" },
-            .{ .key = "^s / Enter", .desc = "Submit: send the review" },
+            .{ .key = "^s", .desc = "Submit: send the review" },
             .{ .key = "^d ^d", .desc = "Submit: discard (press twice)" },
         };
         for (pr_bindings) |b| {

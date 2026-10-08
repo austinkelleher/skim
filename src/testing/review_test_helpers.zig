@@ -565,6 +565,38 @@ test "diff header names the file once the PR description scrolls away" {
     try testing.expect(std.mem.indexOf(u8, header, "File 1 of") != null);
 }
 
+test "submit dialog: Enter while typing the body inserts a newline" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try applySurfacePayload(&app);
+    try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
+
+    try app.handleKey(.{ .codepoint = 'R' });
+    try app.handleKey(.{ .codepoint = 'a', .text = "a" });
+    try app.handleKey(.{ .codepoint = vaxis.Key.enter });
+    try app.handleKey(.{ .codepoint = 'b', .text = "b" });
+
+    try testing.expectEqual(.review_submit, app.mode);
+    try testing.expectEqualStrings("a\nb", app.state.review_submit_editor.?.getText());
+}
+
+test "submit dialog: Enter in vim-normal does not submit" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try applySurfacePayload(&app);
+    try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
+
+    try app.handleKey(.{ .codepoint = 'R' });
+    try app.handleKey(.{ .codepoint = 'a', .text = "a" });
+    try app.handleKey(.{ .codepoint = vaxis.Key.escape });
+    try app.handleKey(.{ .codepoint = vaxis.Key.enter });
+
+    try testing.expectEqual(.review_submit, app.mode);
+    try testing.expect(!app.state.review.submit.submitting);
+}
+
 test "gc: with no PR open the diff stays" {
     const allocator = testing.allocator;
     var app = try initDiffApp(allocator);

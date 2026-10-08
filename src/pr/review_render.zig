@@ -161,7 +161,7 @@ pub fn drawSubmitDialog(win: vaxis.Window, view: SubmitView) void {
     } else {
         footer.styledText(" ", muted);
         drawKeyHint(&footer, "Tab", "verdict");
-        drawKeyHint(&footer, "^S/Enter", "submit");
+        drawKeyHint(&footer, "^S", "submit");
         drawKeyHint(&footer, "^D", "discard");
         drawKeyHint(&footer, "Esc", "cancel");
     }

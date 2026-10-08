@@ -1711,7 +1711,7 @@ pub const UI = struct {
             .agent_selection => "j/k:Move  |  Enter:Select  |  ESC:Cancel",
             .session_picker => "j/k:Move  |  Enter:Load  |  ESC:Cancel",
             .pr_review => "j/k:Move  |  l/h:Expand/Collapse  |  S:Fold all  |  Enter:Open  |  c:Changed  |  m:Seen  |  f:Filter  |  R:Sync  |  ^b:Hide  |  ?:Help",
-            .review_submit => "Tab:Verdict  |  ^S/Enter:Submit  |  ^D:Discard  |  ESC:Cancel",
+            .review_submit => "Tab:Verdict  |  ^S:Submit  |  ^D:Discard  |  ESC:Cancel",
             .pr_info => "j/k:Scroll  |  ^d/^u:Page  |  i/ESC/q:Close",
             .agent => blk: {
                 if (app.getActiveAgentStateConst()) |agent_state| {

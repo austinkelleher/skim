@@ -6,7 +6,7 @@ const review_controller = @import("../pr/review_controller.zig");
 
 /// Handle keyboard input in the submit-review dialog (FR-6/FR-7). Tab cycles the
 /// verdict, Ctrl-D runs the two-step discard confirm, and the embedded vim editor
-/// owns the body: Enter / Ctrl-S submits, Shift-Enter / Ctrl-J inserts a newline,
+/// owns the body: Ctrl-S submits, Enter / Shift-Enter / Ctrl-J inserts a newline,
 /// Esc from vim-normal closes the dialog (preserving the body for reopen).
 pub fn handleKey(app: *App, key: vaxis.Key) !void {
     const review = &app.state.review;
@@ -63,7 +63,20 @@ pub fn handleKey(app: *App, key: vaxis.Key) !void {
         return;
     }
 
-    const action = try comment_editor.CommentEditor.VimEditor.handleKey(editor_state, key, app.allocator);
+    // A review body is multi-line prose, so plain Enter never submits here (^S
+    // does): it inserts a newline while typing and is a no-op in vim-normal. The
+    // shared editor treats Enter as save, and Shift-Enter only reaches us on
+    // terminals with the kitty keyboard protocol, so rewrite it to Ctrl-J.
+    var editor_key = key;
+    if (key.matches(vaxis.Key.enter, .{})) {
+        switch (editor_state.vim_mode) {
+            .insert => editor_key = .{ .codepoint = 'j', .mods = .{ .ctrl = true } },
+            .normal => return,
+            .visual, .command => {},
+        }
+    }
+
+    const action = try comment_editor.CommentEditor.VimEditor.handleKey(editor_state, editor_key, app.allocator);
     if (action) |act| {
         switch (act) {
             .save => app.submitReviewNow(),
