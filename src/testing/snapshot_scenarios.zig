@@ -1919,7 +1919,7 @@ test "snapshot: help_pr_review_popup" {
 
     const bindings = [_]help_helpers.Binding{
         help_helpers.section("PR REVIEW"),
-        help_helpers.binding("R", "Submit review (verdict + body)"),
+        help_helpers.binding("gr", "Submit review (verdict + body)"),
         help_helpers.binding("i", "Toggle PR info panel"),
         help_helpers.binding("C", "Comment target: GitHub ⇄ local"),
         help_helpers.binding("r", "Refresh diff + refetch threads"),

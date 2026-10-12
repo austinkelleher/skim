@@ -130,6 +130,17 @@ pub const ReplyParams = struct { thread_id: []const u8, body: []const u8, gh_bin
 pub const ThreadIdParams = struct { thread_id: []const u8, gh_bin: []const u8 = "gh" };
 pub const CommentEditParams = struct { comment_id: []const u8, body: []const u8, gh_bin: []const u8 = "gh" };
 pub const CommentIdParams = struct { comment_id: []const u8, gh_bin: []const u8 = "gh" };
+pub const MergeInfoParams = struct { owner_repo: OwnerRepo, number: u32, gh_bin: []const u8 = "gh" };
+/// `auto` enables auto-merge (GitHub merges once requirements pass) instead of
+/// merging now. Either way `head_oid` pins the commit: GitHub refuses when the
+/// PR's head has moved past it.
+pub const MergeParams = struct {
+    pr_node_id: []const u8,
+    method: review_parse.MergeMethod,
+    head_oid: []const u8,
+    auto: bool,
+    gh_bin: []const u8 = "gh",
+};
 
 /// A parsed `skim pr <arg>` / `skim debug pr-view <arg>` positional: a bare PR
 /// number or a github.com PR URL. `url` fields alias the input slice.
@@ -451,6 +462,45 @@ const submit_review_mutation =
     \\}
 ;
 
+const merge_info_query =
+    \\query ($owner: String!, $name: String!, $number: Int!) {
+    \\  repository(owner: $owner, name: $name) {
+    \\    mergeCommitAllowed
+    \\    squashMergeAllowed
+    \\    rebaseMergeAllowed
+    \\    autoMergeAllowed
+    \\    viewerDefaultMergeMethod
+    \\    pullRequest(number: $number) {
+    \\      state
+    \\      isDraft
+    \\      headRefOid
+    \\      mergeable
+    \\      mergeStateStatus
+    \\      reviewDecision
+    \\      viewerCanEnableAutoMerge
+    \\      autoMergeRequest { enabledAt }
+    \\      statusCheckRollup { state }
+    \\    }
+    \\  }
+    \\}
+;
+
+const merge_mutation =
+    \\mutation ($prId: ID!, $method: PullRequestMergeMethod!, $oid: GitObjectID!) {
+    \\  mergePullRequest(input: {pullRequestId: $prId, mergeMethod: $method, expectedHeadOid: $oid}) {
+    \\    pullRequest { state }
+    \\  }
+    \\}
+;
+
+const auto_merge_mutation =
+    \\mutation ($prId: ID!, $method: PullRequestMergeMethod!, $oid: GitObjectID!) {
+    \\  enablePullRequestAutoMerge(input: {pullRequestId: $prId, mergeMethod: $method, expectedHeadOid: $oid}) {
+    \\    pullRequest { autoMergeRequest { enabledAt } }
+    \\  }
+    \\}
+;
+
 /// Comment-node selection for the reply mutation. Byte-mirrors the comment nodes
 /// selected by `review_query`/`thread_node_selection` so `review_parse.parseCreatedComment`
 /// reuses the SAME comment-node parser as the fetch path.
@@ -565,6 +615,25 @@ pub fn submitReview(allocator: std.mem.Allocator, params: SubmitReviewParams) !G
     return runGhCaptureAllowErrorBody(allocator, argv, "gh api graphql (submitPullRequestReview)");
 }
 
+/// Fetch the PR's current merge state and its repo's merge settings (parse with
+/// `review_parse.parseMergeInfo`).
+pub fn fetchMergeInfo(allocator: std.mem.Allocator, params: MergeInfoParams) !GhFetch {
+    const argv = try buildMergeInfoArgs(allocator, params.owner_repo, params.number);
+    defer freeArgv(allocator, argv);
+    try replaceBin(allocator, argv, params.gh_bin);
+    return runGhCapture(allocator, argv, "gh api graphql (merge info)");
+}
+
+/// Merge the PR, or enable auto-merge on it. A rejection (branch protection,
+/// moved head, conflicts) comes back as a 200-with-errors envelope, kept so
+/// `review_parse.firstErrorMessage` can surface GitHub's reason.
+pub fn mergePullRequest(allocator: std.mem.Allocator, params: MergeParams) !GhFetch {
+    const argv = try buildMergeArgs(allocator, params);
+    defer freeArgv(allocator, argv);
+    try replaceBin(allocator, argv, params.gh_bin);
+    return runGhCaptureAllowErrorBody(allocator, argv, if (params.auto) "gh api graphql (enablePullRequestAutoMerge)" else "gh api graphql (mergePullRequest)");
+}
+
 /// Reply to an existing review thread. Returns the raw mutation JSON (parse with
 /// `review_parse.parseCreatedComment`). GitHub attaches the reply to the viewer's
 /// pending review if one exists (comment returns `state: PENDING`). The body is a
@@ -677,6 +746,31 @@ fn buildDeleteReviewArgs(allocator: std.mem.Allocator, review_id: []const u8) ![
     return buildGraphqlArgv(allocator, delete_review_mutation, &.{
         .{ .key = "id", .value = review_id },
     }, &.{});
+}
+
+fn buildMergeInfoArgs(allocator: std.mem.Allocator, owner_repo: OwnerRepo, number: u32) ![][]const u8 {
+    return buildGraphqlArgv(allocator, merge_info_query, &.{
+        .{ .key = "owner", .value = owner_repo.owner },
+        .{ .key = "name", .value = owner_repo.repo },
+    }, &.{
+        .{ .key = "number", .value = @intCast(number) },
+    });
+}
+
+fn buildMergeArgs(allocator: std.mem.Allocator, params: MergeParams) ![][]const u8 {
+    return buildGraphqlArgv(allocator, if (params.auto) auto_merge_mutation else merge_mutation, &.{
+        .{ .key = "prId", .value = params.pr_node_id },
+        .{ .key = "method", .value = mergeMethodArg(params.method) },
+        .{ .key = "oid", .value = params.head_oid },
+    }, &.{});
+}
+
+fn mergeMethodArg(method: review_parse.MergeMethod) []const u8 {
+    return switch (method) {
+        .squash => "SQUASH",
+        .merge => "MERGE",
+        .rebase => "REBASE",
+    };
 }
 
 fn sideArg(side: review_parse.Side) []const u8 {
@@ -1198,6 +1292,34 @@ test "buildDeleteCommentArgs: carries comment id and mutation name" {
     defer freeArgv(testing.allocator, argv);
     try testing.expect(argvContains(argv, "cid=PRRC_del"));
     try testing.expect(std.mem.indexOf(u8, argv[4], "deletePullRequestReviewComment") != null);
+}
+
+test "buildMergeInfoArgs: asks for the PR's merge state and the repo's merge settings" {
+    const argv = try buildMergeInfoArgs(testing.allocator, .{ .owner = "ctdio", .repo = "skim" }, 42);
+    defer freeArgv(testing.allocator, argv);
+    try testing.expect(argvContains(argv, "owner=ctdio"));
+    try testing.expect(argvContains(argv, "name=skim"));
+    try testing.expect(argvContains(argv, "number=42"));
+    try testing.expect(std.mem.indexOf(u8, argv[4], "mergeStateStatus") != null);
+    try testing.expect(std.mem.indexOf(u8, argv[4], "squashMergeAllowed") != null);
+}
+
+test "buildMergeArgs: pins the merge to the reviewed head commit" {
+    const argv = try buildMergeArgs(testing.allocator, .{ .pr_node_id = "PR_1", .method = .squash, .head_oid = "abc123", .auto = false });
+    defer freeArgv(testing.allocator, argv);
+    try testing.expect(argvContains(argv, "prId=PR_1"));
+    try testing.expect(argvContains(argv, "method=SQUASH"));
+    try testing.expect(argvContains(argv, "oid=abc123"));
+    try testing.expect(std.mem.indexOf(u8, argv[4], "mergePullRequest") != null);
+    try testing.expect(std.mem.indexOf(u8, argv[4], "expectedHeadOid: $oid") != null);
+}
+
+test "buildMergeArgs: auto enables auto-merge instead of merging now" {
+    const argv = try buildMergeArgs(testing.allocator, .{ .pr_node_id = "PR_1", .method = .rebase, .head_oid = "abc123", .auto = true });
+    defer freeArgv(testing.allocator, argv);
+    try testing.expect(argvContains(argv, "method=REBASE"));
+    try testing.expect(std.mem.indexOf(u8, argv[4], "enablePullRequestAutoMerge") != null);
+    try testing.expect(std.mem.indexOf(u8, argv[4], "expectedHeadOid: $oid") != null);
 }
 
 test "buildGraphqlArgv: mirrors gh api graphql -f/-F shape" {

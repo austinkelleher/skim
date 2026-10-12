@@ -105,6 +105,40 @@ pub const PrReviewData = struct {
     }
 };
 
+pub const PrState = enum { open, merged, closed };
+
+pub const MergeMethod = enum { squash, merge, rebase };
+
+pub const Mergeable = enum { mergeable, conflicting, unknown };
+
+pub const MergeStateStatus = enum { clean, unstable, has_hooks, behind, blocked, dirty, draft, unknown };
+
+pub const ReviewDecision = enum { approved, changes_requested, review_required, none };
+
+/// A PR's merge-relevant state plus its repo's merge settings, from
+/// `github.merge_info_query`. Owns no memory, so it copies freely.
+pub const MergeInfo = struct {
+    state: PrState = .open,
+    is_draft: bool = false,
+    head_oid_buf: [64]u8 = undefined,
+    head_oid_len: usize = 0,
+    mergeable: Mergeable = .unknown,
+    merge_state: MergeStateStatus = .unknown,
+    review_decision: ReviewDecision = .none,
+    rollup: RollupState = .none,
+    auto_merge_enabled: bool = false,
+    viewer_can_enable_auto_merge: bool = false,
+    merge_allowed: bool = false,
+    squash_allowed: bool = false,
+    rebase_allowed: bool = false,
+    auto_merge_allowed: bool = false,
+    default_method: ?MergeMethod = null,
+
+    pub fn headOid(self: *const MergeInfo) []const u8 {
+        return self.head_oid_buf[0..self.head_oid_len];
+    }
+};
+
 /// Parse the GraphQL JSON for a single PR into `PrDetails`. Errors only on
 /// structurally-broken payloads (invalid JSON, no `data.repository.pullRequest`);
 /// unknown enums / missing scalar fields degrade to safe defaults.
@@ -372,6 +406,37 @@ pub fn firstErrorMessage(allocator: std.mem.Allocator, json_bytes: []const u8) !
     return try allocator.dupe(u8, msg);
 }
 
+/// Parse a `merge_info_query` response. Errors only when the payload has no
+/// `data.repository.pullRequest`; unknown enum strings degrade to safe defaults.
+pub fn parseMergeInfo(allocator: std.mem.Allocator, json_bytes: []const u8) !MergeInfo {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidPayload;
+    const data = objField(parsed.value.object, "data") orelse return error.InvalidPayload;
+    const repository = objField(data, "repository") orelse return error.InvalidPayload;
+    const pull_request = objField(repository, "pullRequest") orelse return error.InvalidPayload;
+
+    var info = MergeInfo{
+        .state = prStateFrom(strField(pull_request, "state") orelse ""),
+        .is_draft = boolField(pull_request, "isDraft"),
+        .mergeable = mergeableFrom(strField(pull_request, "mergeable") orelse ""),
+        .merge_state = mergeStateFrom(strField(pull_request, "mergeStateStatus") orelse ""),
+        .review_decision = reviewDecisionFrom(strField(pull_request, "reviewDecision") orelse ""),
+        .rollup = parseRollup(pull_request),
+        .auto_merge_enabled = objField(pull_request, "autoMergeRequest") != null,
+        .viewer_can_enable_auto_merge = boolField(pull_request, "viewerCanEnableAutoMerge"),
+        .merge_allowed = boolField(repository, "mergeCommitAllowed"),
+        .squash_allowed = boolField(repository, "squashMergeAllowed"),
+        .rebase_allowed = boolField(repository, "rebaseMergeAllowed"),
+        .auto_merge_allowed = boolField(repository, "autoMergeAllowed"),
+        .default_method = mergeMethodFrom(strField(repository, "viewerDefaultMergeMethod") orelse ""),
+    };
+    const oid = strField(pull_request, "headRefOid") orelse "";
+    info.head_oid_len = @min(oid.len, info.head_oid_buf.len);
+    @memcpy(info.head_oid_buf[0..info.head_oid_len], oid[0..info.head_oid_len]);
+    return info;
+}
+
 pub fn parsePrView(allocator: std.mem.Allocator, json_bytes: []const u8) !PrViewMeta {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
     defer parsed.deinit();
@@ -614,6 +679,48 @@ fn reviewStateFrom(state: []const u8) ReviewState {
     if (std.mem.eql(u8, state, "CHANGES_REQUESTED")) return .changes_requested;
     if (std.mem.eql(u8, state, "DISMISSED")) return .dismissed;
     return .unknown;
+}
+
+fn prStateFrom(state: []const u8) PrState {
+    if (std.mem.eql(u8, state, "MERGED")) return .merged;
+    if (std.mem.eql(u8, state, "CLOSED")) return .closed;
+    return .open;
+}
+
+fn mergeableFrom(mergeable: []const u8) Mergeable {
+    if (std.mem.eql(u8, mergeable, "MERGEABLE")) return .mergeable;
+    if (std.mem.eql(u8, mergeable, "CONFLICTING")) return .conflicting;
+    return .unknown;
+}
+
+fn mergeStateFrom(status: []const u8) MergeStateStatus {
+    const map = [_]struct { []const u8, MergeStateStatus }{
+        .{ "CLEAN", .clean },
+        .{ "UNSTABLE", .unstable },
+        .{ "HAS_HOOKS", .has_hooks },
+        .{ "BEHIND", .behind },
+        .{ "BLOCKED", .blocked },
+        .{ "DIRTY", .dirty },
+        .{ "DRAFT", .draft },
+    };
+    for (map) |entry| {
+        if (std.mem.eql(u8, status, entry[0])) return entry[1];
+    }
+    return .unknown;
+}
+
+fn reviewDecisionFrom(decision: []const u8) ReviewDecision {
+    if (std.mem.eql(u8, decision, "APPROVED")) return .approved;
+    if (std.mem.eql(u8, decision, "CHANGES_REQUESTED")) return .changes_requested;
+    if (std.mem.eql(u8, decision, "REVIEW_REQUIRED")) return .review_required;
+    return .none;
+}
+
+fn mergeMethodFrom(method: []const u8) ?MergeMethod {
+    if (std.mem.eql(u8, method, "SQUASH")) return .squash;
+    if (std.mem.eql(u8, method, "MERGE")) return .merge;
+    if (std.mem.eql(u8, method, "REBASE")) return .rebase;
+    return null;
 }
 
 fn sideFrom(side: []const u8) Side {
@@ -1180,4 +1287,57 @@ test "parsePrDetails: unicode and CRLF bodies survive byte-exact" {
     defer data.deinit();
     const body = data.details.threads[0].comments[0].body;
     try testing.expectEqualStrings("```suggestion\r\n  var x = .empty;\r\n```\r\n\r\nUse \u{2614} instead", body);
+}
+
+// Shaped like a live `merge_info_query` response.
+const merge_info_payload =
+    \\{"data":{"repository":{"mergeCommitAllowed":false,"squashMergeAllowed":true,"rebaseMergeAllowed":true,
+    \\"autoMergeAllowed":true,"viewerDefaultMergeMethod":"REBASE","pullRequest":{"state":"OPEN","isDraft":false,
+    \\"headRefOid":"9d50cfc37de553870844565c204dd17b2476dae5","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED",
+    \\"reviewDecision":"CHANGES_REQUESTED","viewerCanEnableAutoMerge":true,"autoMergeRequest":{"enabledAt":"2026-10-01T00:00:00Z"},
+    \\"statusCheckRollup":{"state":"PENDING"}}}}}
+;
+
+test "parseMergeInfo: reads the PR's merge state and the repo's merge settings" {
+    const info = try parseMergeInfo(testing.allocator, merge_info_payload);
+
+    try testing.expectEqual(PrState.open, info.state);
+    try testing.expect(!info.is_draft);
+    try testing.expectEqualStrings("9d50cfc37de553870844565c204dd17b2476dae5", info.headOid());
+    try testing.expectEqual(Mergeable.mergeable, info.mergeable);
+    try testing.expectEqual(MergeStateStatus.blocked, info.merge_state);
+    try testing.expectEqual(ReviewDecision.changes_requested, info.review_decision);
+    try testing.expectEqual(RollupState.pending, info.rollup);
+    try testing.expect(info.auto_merge_enabled);
+    try testing.expect(info.viewer_can_enable_auto_merge);
+    try testing.expect(!info.merge_allowed);
+    try testing.expect(info.squash_allowed);
+    try testing.expect(info.rebase_allowed);
+    try testing.expect(info.auto_merge_allowed);
+    try testing.expectEqual(@as(?MergeMethod, .rebase), info.default_method);
+}
+
+test "parseMergeInfo: missing and unknown values degrade to safe defaults" {
+    const payload =
+        \\{"data":{"repository":{"pullRequest":{"state":"MERGED","mergeable":"SOMETHING_NEW",
+        \\"reviewDecision":null,"autoMergeRequest":null,"statusCheckRollup":null}}}}
+    ;
+    const info = try parseMergeInfo(testing.allocator, payload);
+
+    try testing.expectEqual(PrState.merged, info.state);
+    try testing.expectEqualStrings("", info.headOid());
+    try testing.expectEqual(Mergeable.unknown, info.mergeable);
+    try testing.expectEqual(MergeStateStatus.unknown, info.merge_state);
+    try testing.expectEqual(ReviewDecision.none, info.review_decision);
+    try testing.expectEqual(RollupState.none, info.rollup);
+    try testing.expect(!info.auto_merge_enabled);
+    try testing.expect(!info.squash_allowed);
+    try testing.expectEqual(@as(?MergeMethod, null), info.default_method);
+}
+
+test "parseMergeInfo: an error envelope without a PR is an invalid payload" {
+    const payload =
+        \\{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository"}]}
+    ;
+    try testing.expectError(error.InvalidPayload, parseMergeInfo(testing.allocator, payload));
 }

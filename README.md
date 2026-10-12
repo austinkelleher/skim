@@ -172,6 +172,20 @@ a code thread returns to the diff with the cursor on that thread; `gc` or `Esc`
 returns to the diff. The Conversation is read-only: reply to code threads from
 the diff.
 
+`gm` (from the diff, the Conversation, or the sidebar) opens the merge dialog.
+It fetches the PR's merge state fresh and lists what would stop the merge
+(draft, conflicts, new commits since you loaded the PR) and what it would
+override (changes requested, failing checks). `Tab` picks among the merge
+methods the repo allows, starting on your default, and `Enter` merges. The
+merge is pinned to the commit you reviewed, so GitHub refuses it if anything
+was pushed since. While checks are still running or branch protection is
+unmet, `Enter` enables auto-merge instead. A PR stacked on another open PR is
+flagged, since merging it lands on that PR's branch rather than trunk. The
+branch is never deleted.
+
+`:` on a PR lists the PR commands first (merge, submit review, conversation,
+info, comment target, refresh), each with its key.
+
 #### Sidebar Keys
 
 | Key                      | Action                                                                                                          |
@@ -360,13 +374,16 @@ Available when a pull request is open in the diff (`skim pr`). Keys marked _(on 
 | `e` _(on thread)_      | Edit your own comment in the thread                       |
 | `d` _(on thread)_      | Delete your own comment (two-step confirm)                |
 | `x` _(on thread)_      | Toggle resolve / unresolve on the thread                  |
-| `R`                    | Open submit-review dialog (verdict + body)                |
+| `gr`                   | Open submit-review dialog (verdict + body)                |
 | `i`                    | Toggle read-only PR info panel                            |
 | `gc`                   | Show the PR conversation in place of the diff, or back    |
+| `gm`                   | Open the merge dialog                                     |
 | `o` _(on description)_ | Fold / expand the PR description block                    |
-| `r`                    | Refresh diff and refetch review threads                   |
+| `r` / `R`              | Refresh diff and refetch review threads                   |
 
-**SUBMIT REVIEW dialog** (`R`): `Tab` / `Shift-Tab` cycle the verdict (Comment / Approve / Request changes), `Ctrl-S` submits (`Enter` inserts a newline), `Ctrl-D` discards the pending review (two-step confirm), `ESC` cancels. Body editing uses the same vim-style editor as comments.
+**SUBMIT REVIEW dialog** (`gr`): `Tab` / `Shift-Tab` cycle the verdict (Comment / Approve / Request changes), `Ctrl-S` submits (`Enter` inserts a newline), `Ctrl-D` discards the pending review (two-step confirm), `ESC` cancels. Body editing uses the same vim-style editor as comments.
+
+**MERGE dialog** (`gm`): `Tab` / `Shift-Tab` cycle the merge method, `Enter` merges (or enables auto-merge), `ESC` / `q` cancels.
 
 **PR INFO panel** (`i`): `j` / `k` scroll, `Ctrl-d` / `Ctrl-u` page, `g` / `G` jump to top / bottom, `r` refetch, `i` / `q` / `ESC` close.
 
@@ -397,7 +414,7 @@ Available when a pull request is open in the diff (`skim pr`). Keys marked _(on 
 
 | Key | Action                         |
 | --- | ------------------------------ |
-| `r` | Refresh diff (reload from git) |
+| `r` / `R` | Refresh diff (reload from git) |
 | `a` | Stage current file (`git add`) |
 | `A` | Stage all files (`git add -A`) |
 

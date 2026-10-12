@@ -1,9 +1,9 @@
-//! Pure drawing for the two Phase-5 review overlays: the submit-review dialog
-//! (verdict selector + body preview + discard confirm) and the read-only PR info
-//! panel. Both read an immutable `View` snapshot and never mutate app state
-//! (AD-1). The imperative shell (`ui.zig`) builds the centered popup window,
-//! fills it with `dialog_bg`, and feeds these a `SubmitView` / `InfoView`
-//! assembled from the `ReviewSession`; a `bg` on the view keeps every text cell
+//! Pure drawing for the review overlays: the submit-review dialog (verdict
+//! selector + body preview + discard confirm), the read-only PR info panel and
+//! the merge dialog. Each reads an immutable `View` snapshot and never mutates
+//! app state (AD-1). The imperative shell (`ui.zig`) builds the centered popup
+//! window, fills it with `dialog_bg`, and feeds these a `SubmitView` /
+//! `InfoView` / `MergeView` assembled from the session state; a `bg` on the view keeps every text cell
 //! carrying the popup background so the dialog layers cleanly over the diff.
 //!
 //! Layout draws through the shared `pr/line_writer.zig` cell writer, with
@@ -13,6 +13,7 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const review_controller = @import("review_controller.zig");
+const merge_controller = @import("merge_controller.zig");
 const review_parse = @import("review_parse.zig");
 const review_status = @import("review_status.zig");
 const line_writer = @import("line_writer.zig");
@@ -25,6 +26,7 @@ const RollupState = review_parse.RollupState;
 const ReviewState = review_parse.ReviewState;
 const Review = review_parse.Review;
 const CheckRun = review_parse.CheckRun;
+const MergeMethod = review_parse.MergeMethod;
 const Style = vaxis.Cell.Style;
 const Color = vaxis.Cell.Color;
 const LineWriter = line_writer.LineWriter;
@@ -85,6 +87,26 @@ pub const InfoView = struct {
     // acknowledged inside the ~80%-screen overlay, not only on the status bar
     // peeking out below it.
     refreshing: bool = false,
+    bg: Color = .default,
+};
+
+pub const MergeView = struct {
+    number: u32 = 0,
+    title: []const u8 = "",
+    head_ref: []const u8 = "",
+    base_ref: []const u8 = "",
+    /// The open PR whose head branch this PR's base is: merging lands it there,
+    /// not on trunk.
+    stacked_on: ?u32 = null,
+    loading: bool = false,
+    merging: bool = false,
+    lines: []const merge_controller.Line = &.{},
+    /// The methods the repo allows; `method` is the selected one.
+    methods: []const MergeMethod = &.{},
+    method: MergeMethod = .squash,
+    /// What Enter does; null while loading or when a blocker stands.
+    action: ?merge_controller.Action = null,
+    error_msg: []const u8 = "",
     bg: Color = .default,
 };
 
@@ -235,6 +257,84 @@ pub fn drawInfoPanel(win: vaxis.Window, view: InfoView) void {
     var footer = LineWriter.init(.{ .win = win, .row = footer_row, .style = muted, .bg = view.bg });
     footer.styledText(" j/k/^d/^u scroll · g/G ends · r refresh · q close", muted);
     drawScrollIndicator(win, footer_row, view, body_top, body_bottom);
+}
+
+/// Draw the merge dialog into `win` (a pre-sized popup window; this fn paints
+/// the `view.bg` fill): the PR and where it lands, the readiness checklist,
+/// the method selector, and what Enter would do.
+pub fn drawMergeDialog(win: vaxis.Window, view: MergeView) void {
+    if (win.height == 0 or win.width == 0) return;
+    fillBackground(win, view.bg);
+
+    var title = LineWriter.init(.{ .win = win, .row = 0, .style = .{ .fg = .{ .index = 6 }, .bold = true }, .bg = view.bg });
+    title.text(" Merge #");
+    title.unsigned(view.number);
+    if (view.title.len > 0) {
+        title.text(" ");
+        title.styledText(view.title, .{ .bold = true });
+    }
+    if (view.merging) title.styledText("  merging…", muted);
+
+    var rule = LineWriter.init(.{ .win = win, .row = 1, .style = muted, .bg = view.bg });
+    var col: u16 = 0;
+    while (col < win.width) : (col += 1) rule.styledText("─", muted);
+
+    var branches = LineWriter.init(.{ .win = win, .row = 2, .style = muted, .bg = view.bg });
+    branches.styledText(" ", muted);
+    branches.styledText(view.head_ref, muted);
+    branches.styledText(" → ", muted);
+    branches.styledText(view.base_ref, .{ .bold = true });
+    if (view.stacked_on) |parent| {
+        branches.styledText("   ! stacked on #", warn_yellow);
+        branches.styledUnsigned(parent, warn_yellow);
+    }
+
+    const footer_row: u16 = win.height -| 1;
+    const err_row: u16 = win.height -| 2;
+    const method_row: u16 = win.height -| 3;
+    var row: u16 = 3;
+    if (view.loading) {
+        var loading = LineWriter.init(.{ .win = win, .row = row, .style = muted, .bg = view.bg });
+        loading.styledText(" Checking merge status…", muted);
+    }
+    for (view.lines) |line| {
+        if (row >= method_row) break;
+        var writer = LineWriter.init(.{ .win = win, .row = row, .bg = view.bg });
+        const style = levelStyle(line.level);
+        writer.styledText(" ", style);
+        writer.styledText(levelGlyph(line.level), style);
+        writer.styledText(" ", style);
+        writer.styledText(line.text, if (line.level == .ok) Style{} else style);
+        row += 1;
+    }
+
+    if (view.methods.len > 0 and method_row > row) {
+        var methods = LineWriter.init(.{ .win = win, .row = method_row, .bg = view.bg });
+        methods.styledText(" ", muted);
+        for (view.methods, 0..) |method, i| {
+            if (i > 0) methods.styledText("   ", muted);
+            const selected = method == view.method;
+            const style = if (selected) Style{ .fg = .{ .index = 6 }, .bold = true } else muted;
+            methods.styledText(if (selected) "● " else "○ ", style);
+            methods.styledText(merge_controller.methodLabel(method), style);
+        }
+    }
+
+    if (view.error_msg.len > 0 and err_row > row) {
+        var err = LineWriter.init(.{ .win = win, .row = err_row, .style = danger, .bg = view.bg });
+        err.styledText(" ⚠ ", danger);
+        err.styledText(view.error_msg, danger);
+    }
+
+    var footer = LineWriter.init(.{ .win = win, .row = footer_row, .style = muted, .bg = view.bg });
+    footer.styledText(" ", muted);
+    const ready = view.action != null and !view.loading and !view.merging;
+    if (ready and view.methods.len > 1) drawKeyHint(&footer, "Tab", "method");
+    if (ready) drawKeyHint(&footer, "Enter", switch (view.action.?) {
+        .merge => "merge",
+        .auto_merge => "enable auto-merge",
+    });
+    drawKeyHint(&footer, "Esc", if (ready or view.loading) "cancel" else "close");
 }
 
 // =============================================================================
@@ -492,6 +592,22 @@ fn digitCount(value: u64) u16 {
     var v = value;
     while (v >= 10) : (v /= 10) count += 1;
     return count;
+}
+
+fn levelGlyph(level: merge_controller.Level) []const u8 {
+    return switch (level) {
+        .ok => "✓",
+        .warn => "!",
+        .block => "✗",
+    };
+}
+
+fn levelStyle(level: merge_controller.Level) Style {
+    return switch (level) {
+        .ok => ok_green,
+        .warn => warn_yellow,
+        .block => danger,
+    };
 }
 
 fn fillBackground(win: vaxis.Window, bg: Color) void {
@@ -851,6 +967,82 @@ test "drawSubmitDialog: fills every cell with the popup background" {
     // A blank cell (row 1, past the title) still carries the dialog background.
     const cell = ts.screen.readCell(5, 1).?;
     try testing.expect(std.meta.eql(cell.style.bg, bg));
+}
+
+test "drawMergeDialog: header names the PR and the branch it merges into" {
+    var ts = try TestScreen.init(64, 14);
+    defer ts.deinit();
+
+    drawMergeDialog(ts.window(), .{ .number = 42, .title = "Add merging", .head_ref = "feat", .base_ref = "main", .loading = true });
+
+    try testing.expect(rowContains(ts.screen, 0, "Merge #42 Add merging"));
+    try testing.expect(rowContains(ts.screen, 2, "feat → main"));
+    try testing.expect(rowContains(ts.screen, 3, "Checking merge status"));
+}
+
+test "drawMergeDialog: warns when the PR is stacked on another" {
+    var ts = try TestScreen.init(64, 14);
+    defer ts.deinit();
+
+    drawMergeDialog(ts.window(), .{ .number = 43, .head_ref = "top", .base_ref = "feat", .stacked_on = 42 });
+
+    try testing.expect(rowContains(ts.screen, 2, "stacked on #42"));
+}
+
+test "drawMergeDialog: lists the checklist, the allowed methods, and what Enter does" {
+    var ts = try TestScreen.init(64, 14);
+    defer ts.deinit();
+
+    const lines = [_]merge_controller.Line{
+        .{ .level = .ok, .text = "Approved" },
+        .{ .level = .warn, .text = "Checks still running" },
+    };
+    drawMergeDialog(ts.window(), .{
+        .number = 42,
+        .lines = &lines,
+        .methods = &.{ .squash, .rebase },
+        .method = .rebase,
+        .action = .auto_merge,
+    });
+
+    try testing.expect(rowContains(ts.screen, 3, "✓ Approved"));
+    try testing.expect(rowContains(ts.screen, 4, "! Checks still running"));
+    try testing.expect(screenContains(ts.screen, "○ Squash"));
+    try testing.expect(screenContains(ts.screen, "● Rebase"));
+    try testing.expect(!screenContains(ts.screen, "Merge commit"));
+    try testing.expect(rowContains(ts.screen, 13, "Enter enable auto-merge"));
+    try testing.expect(rowContains(ts.screen, 13, "Esc cancel"));
+}
+
+test "drawMergeDialog: a blocked PR offers no Enter" {
+    var ts = try TestScreen.init(64, 14);
+    defer ts.deinit();
+
+    const lines = [_]merge_controller.Line{.{ .level = .block, .text = "Conflicts with the base branch" }};
+    drawMergeDialog(ts.window(), .{ .number = 42, .lines = &lines, .methods = &.{.squash}, .method = .squash, .action = null });
+
+    try testing.expect(rowContains(ts.screen, 3, "✗ Conflicts with the base branch"));
+    try testing.expect(!rowContains(ts.screen, 13, "Enter"));
+    try testing.expect(rowContains(ts.screen, 13, "Esc close"));
+}
+
+test "drawMergeDialog: surfaces GitHub's rejection above the footer" {
+    var ts = try TestScreen.init(64, 14);
+    defer ts.deinit();
+
+    drawMergeDialog(ts.window(), .{ .number = 42, .action = .merge, .methods = &.{.squash}, .error_msg = "Head branch was modified" });
+
+    try testing.expect(rowContains(ts.screen, 12, "Head branch was modified"));
+}
+
+test "drawMergeDialog: shows the merge in flight" {
+    var ts = try TestScreen.init(64, 14);
+    defer ts.deinit();
+
+    drawMergeDialog(ts.window(), .{ .number = 42, .action = .merge, .methods = &.{.squash}, .merging = true });
+
+    try testing.expect(rowContains(ts.screen, 0, "merging…"));
+    try testing.expect(!rowContains(ts.screen, 13, "Enter"));
 }
 
 test "drawInfoPanel: header shows number, title, author, and branch flow" {

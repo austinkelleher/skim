@@ -472,6 +472,16 @@ pub fn render(app: *App, win: vaxis.Window) !void {
         }
     }
 
+    if (app.mode == .pr_merge) {
+        if (profile_frame) {
+            var timer_opt: ?skim_io.Timer = skim_io.Timer.start() catch null;
+            try UI.renderPrMergeDialog(app, win);
+            if (timer_opt) |*timer| overlay_ns += timer.read();
+        } else {
+            try UI.renderPrMergeDialog(app, win);
+        }
+    }
+
     // Render model selection dialog if in model_selection mode
     if (app.mode == .model_selection) {
         if (profile_frame) {

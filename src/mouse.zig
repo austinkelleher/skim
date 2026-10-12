@@ -40,7 +40,7 @@ pub fn wheelKeyForMode(mode: Mode, down: bool) ?u21 {
 
         // Text-input modes and any surface without meaningful vertical scroll
         // ignore the wheel.
-        .comment, .search, .commit_diff_mode, .review_submit => null,
+        .comment, .search, .commit_diff_mode, .review_submit, .pr_merge => null,
     };
 }
 

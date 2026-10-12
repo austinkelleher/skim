@@ -7,6 +7,7 @@
 //!   - `filter`  : case-insensitive substring match (pure)
 //!   - `stack`   : forge-native stacked-PR detection from base->head edges (pure)
 //!   - `review_*`, `thread_hint` : the review session and its threads
+//!   - `merge_controller` : the merge dialog and its `gh` worker
 //!   - `description` : PR body markdown -> display lines (pure)
 //!   - `review_status` : approvers and check tally for the status line (pure)
 //!
@@ -25,6 +26,7 @@ pub const stack = @import("stack.zig");
 pub const review_render = @import("review_render.zig");
 pub const review_parse = @import("review_parse.zig");
 pub const review_controller = @import("review_controller.zig");
+pub const merge_controller = @import("merge_controller.zig");
 pub const thread_hint = @import("thread_hint.zig");
 pub const description = @import("description.zig");
 pub const review_status = @import("review_status.zig");

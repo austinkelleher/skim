@@ -772,6 +772,40 @@ pub const UI = struct {
         });
     }
 
+    /// Centered merge dialog overlay. Pure drawing lives in `pr/review_render.zig`.
+    pub fn renderPrMergeDialog(app: *App, win: vaxis.Window) !void {
+        const review = &app.state.review;
+        const merge = &app.state.merge;
+
+        var lines_buf: [pr.merge_controller.max_lines]pr.merge_controller.Line = undefined;
+        var methods_buf: [3]pr.review_parse.MergeMethod = undefined;
+        const info = merge.info;
+        const reviewed_oid = pr.merge_controller.reviewedOid(merge);
+
+        const popup = centeredPopup(win, .{
+            .desired_width = 64,
+            .desired_height = 14,
+            .min_width = 40,
+            .min_height = 8,
+        });
+
+        pr.review_render.drawMergeDialog(popup, .{
+            .number = merge.number,
+            .title = review.title,
+            .head_ref = review.head_ref,
+            .base_ref = review.base_ref,
+            .stacked_on = merge.stacked_on,
+            .loading = merge.loading,
+            .merging = merge.merging,
+            .lines = if (info) |i| pr.merge_controller.checklist(i, reviewed_oid, &lines_buf) else &.{},
+            .methods = if (info) |i| pr.merge_controller.allowedMethods(i, &methods_buf) else &.{},
+            .method = merge.method,
+            .action = if (info) |i| pr.merge_controller.action(i, reviewed_oid) else null,
+            .error_msg = merge.error_msg orelse "",
+            .bg = Color.dialog_bg,
+        });
+    }
+
     /// Centered read-only PR info panel overlay (FR-7). A large (~80%) bordered
     /// popup over the diff; pure drawing lives in `pr/review_render.zig`.
     pub fn renderPrInfoPanel(app: *App, win: vaxis.Window) !void {
@@ -1656,6 +1690,7 @@ pub const UI = struct {
             .pr_review => "-- PRS --",
             .review_submit => "-- SUBMIT REVIEW --",
             .pr_info => "-- PR INFO --",
+            .pr_merge => "-- MERGE PR --",
             .agent => blk: {
                 // Show vim mode when in agent mode
                 if (app.getActiveAgentStateConst()) |agent_state| {
@@ -1713,6 +1748,7 @@ pub const UI = struct {
             .pr_review => "j/k:Move  |  l/h:Expand/Collapse  |  S:Fold all  |  Enter:Open  |  c:Changed  |  m:Seen  |  f:Filter  |  R:Sync  |  ^b:Hide  |  ?:Help",
             .review_submit => "Tab:Verdict  |  ^S:Submit  |  ^D:Discard  |  ESC:Cancel",
             .pr_info => "j/k:Scroll  |  ^d/^u:Page  |  i/ESC/q:Close",
+            .pr_merge => "Tab:Method  |  Enter:Merge  |  ESC:Cancel",
             .agent => blk: {
                 if (app.getActiveAgentStateConst()) |agent_state| {
                     break :blk switch (agent_state.input.vim.vim_mode) {

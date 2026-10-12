@@ -9,6 +9,7 @@ const platform = @import("platform.zig");
 const menu_stats = @import("menu_stats.zig");
 const state_helpers = @import("state.zig");
 const render_utils = @import("rendering/utils.zig");
+const review_controller = @import("pr/review_controller.zig");
 const Color = @import("rendering/common.zig").Color;
 
 const Allocator = std.mem.Allocator;
@@ -20,6 +21,7 @@ const App = @import("app.zig").App;
 const skim_io = @import("skim_io");
 
 pub const Category = enum {
+    pr,
     navigation,
     view,
     file,
@@ -43,6 +45,17 @@ pub const CommandAction = union(enum) {
     switch_agent: void,
     select_commit: void,
     enter_pr_review: void,
+    pr: PrCommand,
+};
+
+/// Commands on the PR under review, listed only while one is open.
+pub const PrCommand = enum {
+    merge,
+    submit_review,
+    conversation,
+    info,
+    toggle_comment_target,
+    refresh,
 };
 
 pub const Command = struct {
@@ -50,6 +63,8 @@ pub const Command = struct {
     display_name: []const u8, // Truncated/formatted for display
     aliases: []const []const u8 = &[_][]const u8{},
     description: []const u8,
+    /// The key that runs this outside the palette, shown on its row.
+    keys: []const u8 = "",
     action: CommandAction,
     category: Category,
     owns_display_name: bool, // Track if we need to free display_name
@@ -163,6 +178,14 @@ pub const CommandPaletteState = struct {
                 .additions = stats.additions,
                 .deletions = stats.deletions,
             });
+        }
+
+        // PR commands go first so `:` on a PR opens on them.
+        if (review_controller.isActive(&app.state.review)) {
+            for (pr_commands) |command| {
+                if (!availableOn(command.action, platform.is_web)) continue;
+                try self.commands.append(self.allocator, command);
+            }
         }
 
         // Built-in commands (no stats except the diff sources above).
@@ -433,6 +456,20 @@ fn truncatePath(allocator: Allocator, path: []const u8, max_length: usize) ![]co
     return result.toOwnedSlice(allocator);
 }
 
+fn prCommand(params: struct { name: []const u8, keys: []const u8, description: []const u8, command: PrCommand }) Command {
+    return .{
+        .name = params.name,
+        .display_name = params.name,
+        .keys = params.keys,
+        .description = params.description,
+        .action = .{ .pr = params.command },
+        .category = .pr,
+        .owns_display_name = false,
+        .additions = 0,
+        .deletions = 0,
+    };
+}
+
 // Case-insensitive substring search
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0) return true;
@@ -461,6 +498,15 @@ fn containsAlias(aliases: []const []const u8, query: []const u8) bool {
     return false;
 }
 
+const pr_commands = [_]Command{
+    prCommand(.{ .name = "Merge PR", .keys = "gm", .description = "Merge or auto-merge, pinned to the reviewed commit", .command = .merge }),
+    prCommand(.{ .name = "Submit Review", .keys = "gr", .description = "Comment, approve, or request changes", .command = .submit_review }),
+    prCommand(.{ .name = "PR Conversation", .keys = "gc", .description = "Conversation in place of the diff", .command = .conversation }),
+    prCommand(.{ .name = "PR Info", .keys = "i", .description = "Checks, reviews, and description", .command = .info }),
+    prCommand(.{ .name = "Toggle Comment Target", .keys = "C", .description = "New comments: GitHub draft or local", .command = .toggle_comment_target }),
+    prCommand(.{ .name = "Refresh PR", .keys = "r", .description = "Reload the diff and refetch threads", .command = .refresh }),
+};
+
 // Fixed width for command palette - prevents jarring resize on content change
 const COMMAND_PALETTE_WIDTH: usize = 100;
 const DIALOG_PADDING: usize = 1; // Horizontal padding inside dialogs
@@ -472,7 +518,7 @@ pub fn availableOn(action: CommandAction, web: bool) bool {
     if (!web) return true;
     return switch (action) {
         .jump_to_file, .toggle_view_mode, .show_help => true,
-        .refresh_diff, .quit, .switch_diff_mode, .switch_agent, .select_commit, .enter_pr_review => false,
+        .refresh_diff, .quit, .switch_diff_mode, .switch_agent, .select_commit, .enter_pr_review, .pr => false,
     };
 }
 
@@ -671,6 +717,15 @@ pub fn renderCommandPalette(app: *App, win: vaxis.Window) !void {
                 try segments.append(app.allocator, .{ .text = try RenderUtils.copyFrameText(app, deletions_text), .style = .{ .fg = Color.red, .bg = Color.dialog_bg, .bold = true } });
             }
 
+            if (cmd.keys.len > 0 and current_width + 2 + cmd.keys.len + right_margin <= palette_width) {
+                const padding_needed = palette_width - right_margin - cmd.keys.len - current_width;
+                var padding_buf: [100]u8 = undefined;
+                @memset(&padding_buf, ' ');
+                const padding = padding_buf[0..@min(padding_needed, padding_buf.len)];
+                try segments.append(app.allocator, .{ .text = try RenderUtils.copyFrameText(app, padding), .style = .{ .bg = Color.dialog_bg } });
+                try segments.append(app.allocator, .{ .text = cmd.keys, .style = .{ .fg = Color.cyan, .bg = Color.dialog_bg, .bold = true } });
+            }
+
             _ = palette_win.print(segments.items, .{ .row_offset = @intCast(row), .col_offset = DIALOG_PADDING, .wrap = .none });
         }
 
@@ -751,4 +806,10 @@ test "availableOn: the terminal build keeps every command" {
     try std.testing.expect(availableOn(.refresh_diff, false));
     try std.testing.expect(availableOn(.quit, false));
     try std.testing.expect(availableOn(.enter_pr_review, false));
+    try std.testing.expect(availableOn(.{ .pr = .merge }, false));
+}
+
+test "availableOn: the browser drops the PR commands" {
+    try std.testing.expect(!availableOn(.{ .pr = .merge }, true));
+    try std.testing.expect(!availableOn(.{ .pr = .submit_review }, true));
 }

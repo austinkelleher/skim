@@ -37,6 +37,7 @@ pub const SyntaxHighlighter = @import("highlighting/core.zig").SyntaxHighlighter
 pub const TabManager = @import("agent/tab_manager.zig").TabManager;
 pub const CommentController = @import("comments/controller.zig").CommentController;
 pub const mcp_handlers = @import("mcp/handlers.zig");
+pub const command_palette = @import("command_palette.zig");
 
 pub const AnchoredThread = thread_anchor.AnchoredThread;
 pub const Placement = thread_anchor.Placement;

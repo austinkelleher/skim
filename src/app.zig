@@ -55,6 +55,7 @@ const session_picker_mode = @import("modes/session_picker_mode.zig");
 const pr_review_mode = @import("modes/pr_review_mode.zig");
 const review_submit_mode = @import("modes/review_submit_mode.zig");
 const pr_info_mode = @import("modes/pr_info_mode.zig");
+const pr_merge_mode = @import("modes/pr_merge_mode.zig");
 const agent_mode = @import("modes/agent_mode.zig");
 const agent = @import("agent/agent.zig");
 const debug_replay_controller = @import("agent/debug_replay_controller.zig");
@@ -73,6 +74,7 @@ const conversation_state = @import("pr/conversation/state.zig");
 const sidebar_controller = @import("pr/sidebar/controller.zig");
 const pr_types = @import("pr/db/types.zig");
 const review_controller = @import("pr/review_controller.zig");
+const merge_controller = @import("pr/merge_controller.zig");
 const flip = @import("pr/flip.zig");
 const flip_controller = @import("pr/flip_controller.zig");
 const surface_controller = @import("pr/surface_controller.zig");
@@ -292,6 +294,7 @@ pub const App = struct {
         review: review_controller.ReviewSession = .{},
         // The Conversation screen (`gc`) shown in place of the diff.
         conversation: conversation_state.ConversationState = .{},
+        merge: merge_controller.MergeState = .{},
 
         // PR sidebar (AD-8): the stack-grouped PR list beside the diff, and
         // the native surface that owns its Store connection + SyncWorker.
@@ -958,6 +961,7 @@ pub const App = struct {
         flip.deinitState(&self.state.flip, self.allocator);
         // Clean up native GitHub review session (joins its in-flight worker too).
         review_controller.deinitState(&self.state.review, self.allocator);
+        merge_controller.deinitState(&self.state.merge, self.allocator);
         // Clean up TUI server and session
         if (self.session_manager) |*sm| {
             sm.removeSession();
@@ -2095,6 +2099,10 @@ pub const App = struct {
                     self.needs_render = true;
                     return;
                 },
+                .pr_merge => {
+                    pr_merge_mode.close(self);
+                    return;
+                },
                 .agent => {
                     // In agent mode, single Ctrl+C closes subagent drill-in first,
                     // then exits history mode.
@@ -2134,6 +2142,7 @@ pub const App = struct {
             .pr_review => try pr_review_mode.handleKey(self, key),
             .review_submit => try review_submit_mode.handleKey(self, key),
             .pr_info => try pr_info_mode.handleKey(self, key),
+            .pr_merge => try pr_merge_mode.handleKey(self, key),
             .agent => try agent_mode.handleKey(self, key),
         }
     }
@@ -2538,6 +2547,17 @@ pub const App = struct {
             .enter_pr_review => {
                 self.openPrSurface(.{});
             },
+            .pr => |command| switch (command) {
+                .merge => pr_merge_mode.open(self),
+                .submit_review => self.openReviewSubmit(),
+                .conversation => pr_review_mode.toggleConversation(self),
+                .info => self.openPrInfo(),
+                .toggle_comment_target => normal_mode.toggleCommentTarget(self),
+                .refresh => {
+                    try self.refresh();
+                    self.startReviewRefetch();
+                },
+            },
             else => {},
         }
     }
@@ -2753,6 +2773,7 @@ pub const App = struct {
         self.pollReviewMutations();
         self.pollReviewThreadMutations();
         self.pollReviewSubmit();
+        pr_merge_mode.poll(self);
         surface_controller.tick(self.surfaceCtx(), skim_io.milliTimestamp());
     }
 
@@ -2927,7 +2948,7 @@ pub const App = struct {
         };
     }
 
-    /// Open the submit-review dialog for the active session (bound to `R`). Inits
+    /// Open the submit-review dialog for the active session (bound to `gr`). Inits
     /// the body editor (restoring any Esc-stashed body) and switches to the
     /// dialog mode. No-op when no review session is active.
     pub fn openReviewSubmit(self: *App) void {

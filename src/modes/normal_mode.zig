@@ -10,6 +10,7 @@ const CommentController = @import("../comments/controller.zig").CommentControlle
 const review_controller = @import("../pr/review_controller.zig");
 const help_mode = @import("help_mode.zig");
 const pr_review_mode = @import("pr_review_mode.zig");
+const pr_merge_mode = @import("pr_merge_mode.zig");
 
 /// Handle keyboard input when in normal mode
 pub fn handleKey(app: *App, key: vaxis.Key) !void {
@@ -115,6 +116,14 @@ pub fn handleKey(app: *App, key: vaxis.Key) !void {
         }
         if (key.codepoint == 'c') {
             pr_review_mode.toggleConversation(app);
+            return;
+        }
+        if (key.codepoint == 'm') {
+            pr_merge_mode.open(app);
+            return;
+        }
+        if (key.codepoint == 'r') {
+            openReviewSubmit(app);
             return;
         }
         // Any other key cancels the pending g, but still processes the key below
@@ -405,6 +414,10 @@ pub fn handleKey(app: *App, key: vaxis.Key) !void {
                 app.startReviewRefetch();
             }
         },
+        'R' => {
+            try app.refresh();
+            app.startReviewRefetch();
+        },
         'y' => try CommentController.yankCurrentCommentToClipboard(app),
         'Y' => try CommentController.yankAllCommentsToClipboard(app),
         'd' => {
@@ -483,7 +496,6 @@ pub fn handleKey(app: *App, key: vaxis.Key) !void {
         'B' => app.toggleBlame(), // Toggle git blame in gutter
         'S' => try app.startGraphiteStack(), // Open graphite stack picker
         'C' => toggleCommentTarget(app), // Toggle new-comment target (GitHub draft ⇄ local)
-        'R' => openReviewSubmit(app), // Submit-review dialog (verdict + body)
         'i' => openPrInfo(app), // Read-only PR info panel
         else => {
             // Reset count prefix on any other key
@@ -494,7 +506,7 @@ pub fn handleKey(app: *App, key: vaxis.Key) !void {
 
 /// Open the submit-review dialog for the active session. No-op (with a hint) when
 /// no session is active (guards the key against non-review diffs).
-fn openReviewSubmit(app: *App) void {
+pub fn openReviewSubmit(app: *App) void {
     if (!review_controller.isActive(&app.state.review)) {
         app.showStatusMessage("no active PR review session");
         return;
@@ -514,7 +526,7 @@ fn openPrInfo(app: *App) void {
 
 /// Toggle where new comments are written for the active PR review session. No-op
 /// (with a hint) when no session is active.
-fn toggleCommentTarget(app: *App) void {
+pub fn toggleCommentTarget(app: *App) void {
     if (!review_controller.isActive(&app.state.review)) {
         app.showStatusMessage("no active PR review session");
         return;

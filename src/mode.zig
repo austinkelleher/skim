@@ -23,4 +23,5 @@ pub const Mode = enum {
     pr_review, // PR sidebar has focus (AD-8)
     review_submit, // Submit-review dialog (verdict + body) for a PR session
     pr_info, // Read-only PR info panel overlay
+    pr_merge, // Merge dialog for the PR under review
 };

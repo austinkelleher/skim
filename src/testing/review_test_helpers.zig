@@ -572,7 +572,8 @@ test "submit dialog: Enter while typing the body inserts a newline" {
     try applySurfacePayload(&app);
     try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
 
-    try app.handleKey(.{ .codepoint = 'R' });
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'r' });
     try app.handleKey(.{ .codepoint = 'a', .text = "a" });
     try app.handleKey(.{ .codepoint = vaxis.Key.enter });
     try app.handleKey(.{ .codepoint = 'b', .text = "b" });
@@ -588,13 +589,159 @@ test "submit dialog: Enter in vim-normal does not submit" {
     try applySurfacePayload(&app);
     try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
 
-    try app.handleKey(.{ .codepoint = 'R' });
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'r' });
     try app.handleKey(.{ .codepoint = 'a', .text = "a" });
     try app.handleKey(.{ .codepoint = vaxis.Key.escape });
     try app.handleKey(.{ .codepoint = vaxis.Key.enter });
 
     try testing.expectEqual(.review_submit, app.mode);
     try testing.expect(!app.state.review.submit.submitting);
+}
+
+test "gr: opens the submit-review dialog from the diff" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try applySurfacePayload(&app);
+    try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
+
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'r' });
+
+    try testing.expectEqual(.review_submit, app.mode);
+}
+
+test "gr: opens the submit-review dialog from the conversation" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try applySurfacePayload(&app);
+    try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
+
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'c' });
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'r' });
+
+    try testing.expectEqual(.review_submit, app.mode);
+}
+
+test "gr: with no PR open says so and stays on the diff" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'r' });
+
+    try testing.expectEqual(.normal, app.mode);
+    try testing.expectEqualStrings("no active PR review session", app.state.status_message.?);
+}
+
+test "gm: opens the merge dialog and fetches the PR's merge status" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try enterPrForMerge(&app);
+
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'm' });
+
+    try testing.expectEqual(.pr_merge, app.mode);
+    try testing.expect(app.state.merge.open);
+    try testing.expect(app.state.merge.loading);
+    try testing.expectEqual(@as(u32, 42), app.state.merge.number);
+}
+
+test "gm: with no PR open says so and stays on the diff" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'm' });
+
+    try testing.expectEqual(.normal, app.mode);
+    try testing.expectEqualStrings("no active PR review session", app.state.status_message.?);
+}
+
+test "merge dialog: Esc closes it" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try enterPrForMerge(&app);
+
+    try app.handleKey(.{ .codepoint = 'g' });
+    try app.handleKey(.{ .codepoint = 'm' });
+    try app.handleKey(.{ .codepoint = vaxis.Key.escape });
+
+    try testing.expectEqual(.normal, app.mode);
+    try testing.expect(!app.state.merge.open);
+}
+
+test "palette: lists the PR commands with their keys while a PR is open" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try enterPrForMerge(&app);
+
+    try app.handleKey(.{ .codepoint = ':', .text = ":" });
+
+    const merge = paletteCommand(&app, "Merge PR") orelse return error.TestExpectedCommand;
+    try testing.expectEqualStrings("gm", merge.keys);
+    const submit = paletteCommand(&app, "Submit Review") orelse return error.TestExpectedCommand;
+    try testing.expectEqualStrings("gr", submit.keys);
+    try testing.expect(paletteCommand(&app, "PR Conversation") != null);
+    try testing.expect(paletteCommand(&app, "PR Info") != null);
+}
+
+test "palette: the PR commands come first" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try enterPrForMerge(&app);
+
+    try app.handleKey(.{ .codepoint = ':', .text = ":" });
+
+    const first = app.state.command_palette_state.getSelectedCommand() orelse return error.TestExpectedCommand;
+    try testing.expectEqual(.pr, first.category);
+}
+
+test "palette: no PR commands without a PR" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+
+    try app.handleKey(.{ .codepoint = ':', .text = ":" });
+
+    try testing.expect(paletteCommand(&app, "Merge PR") == null);
+}
+
+test "palette: Merge PR opens the merge dialog" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try enterPrForMerge(&app);
+
+    try app.handleKey(.{ .codepoint = ':', .text = ":" });
+    for ("merge pr") |c| try app.handleKey(.{ .codepoint = c, .text = &.{c} });
+    try app.handleKey(.{ .codepoint = vaxis.Key.enter });
+
+    try testing.expectEqual(.pr_merge, app.mode);
+}
+
+test "R refreshes the PR diff" {
+    const allocator = testing.allocator;
+    var app = try initDiffApp(allocator);
+    defer app.deinit();
+    try applySurfacePayload(&app);
+    try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
+    try app.applyRefreshedFiles(try parser.parse(allocator, surface_diff));
+
+    try app.handleKey(.{ .codepoint = 'R' });
+
+    try testing.expect(app.state.diff_load.isLoading());
 }
 
 test "gc: with no PR open the diff stays" {
@@ -2506,6 +2653,22 @@ fn selectNextPr(app: *App) !void {
     app.state.review.gh_bin = missing_bin;
     app.state.review.git_bin = missing_bin;
     try surface_controller.selectPullRequest(app.surfaceCtx(), .{ .number = 7, .base_ref = "main", .title = "Next", .url = "" });
+}
+
+/// The PR surface with review data applied, its merge worker pointed at
+/// binaries that do not exist so a fetch fails fast and offline.
+fn enterPrForMerge(app: *App) !void {
+    try applySurfacePayload(app);
+    try surface_controller.enterReviewDiff(app.surfaceCtx(), .{ .head_ref = pr_head_ref, .base_ref = "" });
+    app.state.merge.gh_bin = missing_bin;
+    app.state.merge.git_bin = missing_bin;
+}
+
+fn paletteCommand(app: *const App, name: []const u8) ?*const review.command_palette.Command {
+    for (app.state.command_palette_state.commands.items) |*command| {
+        if (std.mem.eql(u8, command.name, name)) return command;
+    }
+    return null;
 }
 
 fn waitEntryReady(app: *App) !void {

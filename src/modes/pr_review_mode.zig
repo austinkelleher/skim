@@ -13,6 +13,8 @@ const conversation_state = @import("../pr/conversation/state.zig");
 const flip = @import("../pr/flip.zig");
 const flip_controller = @import("../pr/flip_controller.zig");
 const help_mode = @import("help_mode.zig");
+const normal_mode = @import("normal_mode.zig");
+const pr_merge_mode = @import("pr_merge_mode.zig");
 const Layout = @import("../rendering/common.zig").Layout;
 const Navigation = @import("../navigation.zig").Navigation;
 const review_controller = @import("../pr/review_controller.zig");
@@ -46,6 +48,14 @@ pub fn handleKey(app: *App, key: Key) !void {
         if (key.codepoint == 'c' and !key.mods.ctrl) {
             toggleConversation(app);
             if (app.state.conversation.showing) focusDiff(app);
+            return;
+        }
+        if (key.codepoint == 'm' and !key.mods.ctrl) {
+            pr_merge_mode.open(app);
+            return;
+        }
+        if (key.codepoint == 'r' and !key.mods.ctrl) {
+            normal_mode.openReviewSubmit(app);
             return;
         }
     }
@@ -164,6 +174,14 @@ pub fn handleConversationKey(app: *App, key: Key) !bool {
             },
             'c' => {
                 conversation_state.toggle(conversation);
+                return true;
+            },
+            'm' => {
+                pr_merge_mode.open(app);
+                return true;
+            },
+            'r' => {
+                normal_mode.openReviewSubmit(app);
                 return true;
             },
             else => {},
