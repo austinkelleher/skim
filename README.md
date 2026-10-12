@@ -193,8 +193,8 @@ the diff.
 | `F`                      | Next filter preset                                                                                              |
 | `R`                      | Sync now                                                                                                        |
 | `o`                      | Open the selected PR in the browser                                                                             |
-| `y`                      | Yank the selected PR's head branch name                                                                         |
-| `Y`                      | Yank the selected PR's URL                                                                                      |
+| `y`                      | Yank the selected PR's head branch name (every branch, one per line, on an expanded stack's header)             |
+| `Y`                      | Yank the selected PR's URL (every URL, one per line, on an expanded stack's header)                             |
 | `Ctrl-b`                 | Hide / show the sidebar                                                                                         |
 | `?`                      | Keybindings help (closing it returns to the sidebar)                                                            |
 | `Esc` / `Ctrl-c`         | Back: close the menu or prompt, restore the preset, then exit (`skim pr`) or return to the working diff (`:pr`) |

@@ -446,6 +446,28 @@ pub fn yankText(state: *const SidebarState, field: YankField) ?[]const u8 {
     return if (text.len == 0) null else text;
 }
 
+/// On an expanded stack's header: every member's head branch or URL, one per
+/// line tip-first, caller-owned. Null on any other row, where `yankText`
+/// applies, or when every member's field is empty.
+pub fn yankStackText(state: *const SidebarState, allocator: Allocator, field: YankField) !?[]u8 {
+    const row = cursorRow(state) orelse return null;
+    if (row.kind != .stack_header or !isExpanded(state, row.stack)) return null;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (state.stacks.views[row.stack].members) |member| {
+        const record = &state.records.?.items[member];
+        const text = switch (field) {
+            .branch => record.head_ref,
+            .url => record.url,
+        };
+        if (text.len == 0) continue;
+        if (out.items.len > 0) try out.append(allocator, '\n');
+        try out.appendSlice(allocator, text);
+    }
+    if (out.items.len == 0) return null;
+    return try out.toOwnedSlice(allocator);
+}
+
 /// Index into `records.items` of PR `number`, whether or not the filter shows it.
 pub fn recordIndex(state: *const SidebarState, number: u32) ?usize {
     const records = state.records orelse return null;

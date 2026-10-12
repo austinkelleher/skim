@@ -3903,6 +3903,58 @@ test "yankText: no URL to yank for a PR synced without one" {
     try testing.expectEqualStrings("feat/x", controller.yankText(&sb, .branch).?);
 }
 
+test "yankStackText: an expanded stack's header yields every member's branch, tip-first" {
+    var sb = try yankStackState();
+    defer controller.deinitState(&sb, testing.allocator);
+    try controller.toggleExpand(&sb, testing.allocator);
+
+    const text = (try controller.yankStackText(&sb, testing.allocator, .branch)).?;
+    defer testing.allocator.free(text);
+
+    try testing.expectEqualStrings("s-c\ns-b\ns-a", text);
+}
+
+test "yankStackText: an expanded stack's header yields every member's URL, tip-first" {
+    var sb = try yankStackState();
+    defer controller.deinitState(&sb, testing.allocator);
+    try controller.toggleExpand(&sb, testing.allocator);
+
+    const text = (try controller.yankStackText(&sb, testing.allocator, .url)).?;
+    defer testing.allocator.free(text);
+
+    try testing.expectEqualStrings("https://github.com/o/r/pull/3\nhttps://github.com/o/r/pull/2\nhttps://github.com/o/r/pull/1", text);
+}
+
+test "yankStackText: a collapsed stack's header yields nothing, leaving yankText's review target" {
+    var sb = try yankStackState();
+    defer controller.deinitState(&sb, testing.allocator);
+
+    try testing.expectEqual(@as(?[]u8, null), try controller.yankStackText(&sb, testing.allocator, .branch));
+}
+
+test "yankStackText: a member row of an expanded stack yields nothing" {
+    var sb = try yankStackState();
+    defer controller.deinitState(&sb, testing.allocator);
+    try controller.toggleExpand(&sb, testing.allocator);
+    controller.move(&sb, 1);
+
+    try testing.expectEqual(@as(?[]u8, null), try controller.yankStackText(&sb, testing.allocator, .branch));
+}
+
+test "yankStackText: members without a URL are skipped" {
+    var sb = try stateFrom(&.{
+        .{ .number = 2, .head = "s-b", .base = "s-a", .url = "https://github.com/o/r/pull/2" },
+        .{ .number = 1, .head = "s-a" },
+    }, recent_sync);
+    defer controller.deinitState(&sb, testing.allocator);
+    try controller.toggleExpand(&sb, testing.allocator);
+
+    const text = (try controller.yankStackText(&sb, testing.allocator, .url)).?;
+    defer testing.allocator.free(text);
+
+    try testing.expectEqualStrings("https://github.com/o/r/pull/2", text);
+}
+
 fn menuPresetIndex(sb: *const SidebarState, name: []const u8) usize {
     for (0..menuPresetCount(sb)) |index| {
         if (std.mem.eql(u8, controller.menuPreset(sb, index).name, name)) return index;
@@ -3942,6 +3994,17 @@ fn yankState() !SidebarState {
         .{ .number = 13, .head = "fix/y", .url = "https://github.com/o/r/pull/13" },
     }, recent_sync);
     try testing.expectEqual(@as(u32, 12), rowNumber(&sb, 0));
+    return sb;
+}
+
+/// A collapsed three-PR stack #3 → #2 → #1, cursor on its header.
+fn yankStackState() !SidebarState {
+    const sb = try stateFrom(&.{
+        .{ .number = 3, .head = "s-c", .base = "s-b", .url = "https://github.com/o/r/pull/3" },
+        .{ .number = 2, .head = "s-b", .base = "s-a", .url = "https://github.com/o/r/pull/2" },
+        .{ .number = 1, .head = "s-a", .url = "https://github.com/o/r/pull/1" },
+    }, recent_sync);
+    try testing.expectEqual(root.sidebar_state.RowKind.stack_header, sb.rows.items[0].kind);
     return sb;
 }
 

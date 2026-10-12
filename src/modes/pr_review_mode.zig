@@ -375,7 +375,20 @@ fn toggleSeen(app: *App, number: u32) void {
 }
 
 /// `y` / `Y`: copy the selected PR's head branch or URL and say what was copied.
+/// On an expanded stack's header, every member's.
 fn yank(app: *App, field: sidebar_controller.YankField) void {
+    const stack_text = sidebar_controller.yankStackText(&app.state.sidebar, app.allocator, field) catch return app.showStatusError("clipboard copy failed");
+    if (stack_text) |text| {
+        defer app.allocator.free(text);
+        clipboard.copyToClipboard(app.allocator, text) catch return app.showStatusError("clipboard copy failed");
+        const count = std.mem.count(u8, text, "\n") + 1;
+        const message = switch (field) {
+            .branch => std.fmt.allocPrint(app.allocator, "yanked {d} branches", .{count}),
+            .url => std.fmt.allocPrint(app.allocator, "yanked {d} PR URLs", .{count}),
+        } catch return app.showStatusMessage("yanked");
+        defer app.allocator.free(message);
+        return app.showStatusMessage(message);
+    }
     const text = sidebar_controller.yankText(&app.state.sidebar, field) orelse return app.showStatusError(switch (field) {
         .branch => "no branch to yank",
         .url => "no PR URL to yank",
