@@ -472,7 +472,7 @@ fn countCommit(ctx: *anyopaque) void {
     commits.* += 1;
 }
 
-fn writeAbsolute(params: struct { path: []const u8, bytes: []const u8, mode: u32 }) !void {
+fn writeAbsolute(params: struct { path: []const u8, bytes: []const u8, mode: std.posix.mode_t }) !void {
     const io = skim_io.get();
     const file = try std.Io.Dir.createFileAbsolute(io, params.path, .{ .truncate = true, .permissions = .fromMode(params.mode) });
     defer file.close(io);

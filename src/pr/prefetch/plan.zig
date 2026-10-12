@@ -54,8 +54,8 @@ pub const FetchBackoff = struct {
 /// killed mid-transfer also leaves its `tmp_pack_*` behind, which the worker
 /// sweeps at start (`isStaleTmpPack`).
 pub const fetch_flags = [_][]const u8{
-    "git",                   "-c",                      "http.lowSpeedLimit=1000", "-c",      "http.lowSpeedTime=30",
-    "-c",                    "fetch.unpackLimit=1",     "fetch",                   "--quiet", "--no-tags",
+    "git",                   "-c",                      "http.lowSpeedLimit=1000", "-c",          "http.lowSpeedTime=30",
+    "-c",                    "fetch.unpackLimit=1",     "fetch",                   "--porcelain", "--no-tags",
     "--no-write-fetch-head", "--no-recurse-submodules", "--no-auto-maintenance",   "origin",
 };
 
@@ -174,6 +174,32 @@ pub fn dropLockedRefspecs(refspecs: [][]const u8, stderr: []const u8) usize {
     return kept;
 }
 
+/// Compact refspecs past rejected destinations in `git fetch --porcelain`
+/// output. Only use this for a reported local-ref conflict, not auth or transport errors.
+pub fn dropRejectedRefspecs(refspecs: [][]const u8, output: []const u8) usize {
+    var kept: usize = 0;
+    for (refspecs) |spec| {
+        if (isRejected(output, refspecDestination(spec))) continue;
+        refspecs[kept] = spec;
+        kept += 1;
+    }
+    return kept;
+}
+
+fn isRejected(output: []const u8, destination: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        var fields = std.mem.tokenizeAny(u8, line, " \r\t");
+        if (!std.mem.eql(u8, fields.next() orelse continue, "!")) continue;
+        if (!isOid(fields.next() orelse continue)) continue;
+        if (!isOid(fields.next() orelse continue)) continue;
+        const ref = fields.next() orelse continue;
+        if (fields.next() != null) continue;
+        if (std.mem.eql(u8, ref, destination)) return true;
+    }
+    return false;
+}
+
 /// True when a ref lock failed because another git process holds the
 /// `.lock` file ("Unable to create '...lock': File exists"). That is
 /// transient contention, so the fetch counts as failed rather than dropping
@@ -282,9 +308,9 @@ test "buildFetchArgv prefixes the fixed flags and dedupes refspecs" {
     const argv = try buildFetchArgv(testing.allocator, &.{ "s1", "s2", "s1" });
     defer testing.allocator.free(argv);
     const expected = [_][]const u8{
-        "git",                   "-c",                      "http.lowSpeedLimit=1000", "-c",      "http.lowSpeedTime=30",
-        "-c",                    "fetch.unpackLimit=1",     "fetch",                   "--quiet", "--no-tags",
-        "--no-write-fetch-head", "--no-recurse-submodules", "--no-auto-maintenance",   "origin",  "s1",
+        "git",                   "-c",                      "http.lowSpeedLimit=1000", "-c",          "http.lowSpeedTime=30",
+        "-c",                    "fetch.unpackLimit=1",     "fetch",                   "--porcelain", "--no-tags",
+        "--no-write-fetch-head", "--no-recurse-submodules", "--no-auto-maintenance",   "origin",      "s1",
         "s2",
     };
     try testing.expectEqual(expected.len, argv.len);
@@ -414,4 +440,18 @@ test "FetchBackoff.Stamp does not confuse a shifted field boundary" {
     const left = FetchBackoff.Stamp.of(.{ .head_oid = "ab", .updated_at = "c" });
     const right = FetchBackoff.Stamp.of(.{ .head_oid = "a", .updated_at = "bc" });
     try testing.expect(!std.meta.eql(left, right));
+}
+
+test "dropRejectedRefspecs drops only rejected porcelain destinations" {
+    var specs = [_][]const u8{ "+refs/heads/nest/inner:refs/remotes/origin/nest/inner", "+refs/heads/main:refs/remotes/origin/main" };
+    const output = "! 0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/remotes/origin/nest/inner\n" ++
+        "= 2222222222222222222222222222222222222222 2222222222222222222222222222222222222222 refs/remotes/origin/main\n";
+    const len = dropRejectedRefspecs(&specs, output);
+    try testing.expectEqual(@as(usize, 1), len);
+    try testing.expectEqualStrings("+refs/heads/main:refs/remotes/origin/main", specs[0]);
+}
+
+test "dropRejectedRefspecs ignores malformed output and unrelated refs" {
+    var specs = [_][]const u8{"+refs/heads/main:refs/remotes/origin/main"};
+    try testing.expectEqual(@as(usize, 1), dropRejectedRefspecs(&specs, "! bad refs/remotes/origin/main\n! 0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/remotes/origin/other\n"));
 }

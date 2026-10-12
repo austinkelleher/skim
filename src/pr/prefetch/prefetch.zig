@@ -787,7 +787,7 @@ fn fetchWithFallback(ctx: Ctx, refspecs: [][]const u8) error{ GitMissing, Stoppe
         const result = try runFetch(ctx, remaining);
         if (result.ok) return if (drops == 0) .ok else .partial;
         notePullMissing(ctx.round, result.stderr);
-        const kept = dropFailedRefspecs(remaining, result.stderr) orelse {
+        const kept = dropFailedRefspecs(remaining, result) orelse {
             std.log.warn("prefetch: git fetch failed: {s}", .{trimOutput(result.stderr)});
             return .failed;
         };
@@ -807,7 +807,8 @@ fn fetchWithFallback(ctx: Ctx, refspecs: [][]const u8) error{ GitMissing, Stoppe
 
 /// Compacts `refspecs` past the refs a failed fetch blamed and returns the new
 /// length, or null when the failure names no ref.
-fn dropFailedRefspecs(refspecs: [][]const u8, stderr: []const u8) ?usize {
+fn dropFailedRefspecs(refspecs: [][]const u8, result: ChildResult) ?usize {
+    const stderr = result.stderr;
     if (plan.missingRemoteRef(stderr)) |missing| {
         std.log.info("prefetch: origin has no {s}; retrying the batch without it", .{missing});
         return plan.dropRefspec(refspecs, missing);
@@ -818,7 +819,10 @@ fn dropFailedRefspecs(refspecs: [][]const u8, stderr: []const u8) ?usize {
         std.log.warn("prefetch: git fetch hit a ref lock held by another git process: {s}", .{trimOutput(stderr)});
         return null;
     }
-    const kept = plan.dropLockedRefspecs(refspecs, stderr);
+    var kept = plan.dropLockedRefspecs(refspecs, stderr);
+    if (std.mem.indexOf(u8, stderr, "some local refs could not be updated") != null) {
+        kept = plan.dropRejectedRefspecs(refspecs[0..kept], result.stdout);
+    }
     if (kept == refspecs.len) return null;
     std.log.info("prefetch: git could not lock {d} local ref(s); retrying the batch without them: {s}", .{ refspecs.len - kept, trimOutput(stderr) });
     return kept;
@@ -1900,9 +1904,13 @@ test "worker start removes tmp_pack_ files a killed fetch left behind, and keeps
     try std.Io.Dir.cwd().createDirPath(skim_io.get(), pack_dir);
     try std.Io.Dir.cwd().writeFile(skim_io.get(), .{ .sub_path = stale, .data = "partial" });
     try std.Io.Dir.cwd().writeFile(skim_io.get(), .{ .sub_path = fresh, .data = "partial" });
-    const touched = try std.process.run(testing.allocator, skim_io.get(), .{ .argv = &.{ "touch", "-d", "20 minutes ago", stale } });
-    testing.allocator.free(touched.stdout);
-    testing.allocator.free(touched.stderr);
+    {
+        const file = try std.Io.Dir.cwd().openFile(skim_io.get(), stale, .{ .mode = .read_write });
+        defer file.close(skim_io.get());
+        try file.setTimestamps(skim_io.get(), .{
+            .modify_timestamp = .{ .new = .fromNanoseconds(skim_io.nanoTimestamp() - 20 * std.time.ns_per_min) },
+        });
+    }
     const worker = try fx.startWorker(.{});
     defer worker.stop();
     const targets = fx.targets();
